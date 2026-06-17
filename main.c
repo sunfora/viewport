@@ -25,10 +25,13 @@ typedef size_t  size;
 
 #ifdef PRODUCTION
   #define BASE_ADDRESS    NULL
-  #define SPACE_RESERVED  /* TODO(ivan): find out how much */
+  #define BASE_SPACE_RESERVED  /* TODO(ivan): find out how much later */
 #else
-  #define BASE_ADDRESS   ((void*)(TB(32)))
-  #define SPACE_RESERVED GB(1)
+  #define BASE_ADDRESS   ((void*)(TB(2 * 16)))
+  #define DEBUG_PLACE    ((void*)(TB(3 * 16)))
+
+  #define BASE_SPACE_RESERVED GB(1)
+  #define DBGP_SPACE_RESERVED GB(1)
 #endif
 
 inline size page_size() {
@@ -49,9 +52,9 @@ void dump_pages_inside_region(void* memory, size length) {
   void* mincore_start      = memory;
   size  space_left_to_read = length;
   
-  const char* reserved_template = "%p\t%d\t[reserved]\n";
-  const char* not_used_template = "%p\t%d\t[not_used]\n";
-  const char* unmapped_template = "%p\t%d\t[unmapped]\n";
+  const char* used_template     = "%p\t%d\t[   used   ]\n";
+  const char* not_used_template = "%p\t%d\t[ not_used ]\n";
+  const char* unmapped_template = "%p\t%d\t[ unmapped ]\n";
 
   while (space_left_to_read) {
     // here do organize fetch from mincore
@@ -110,7 +113,7 @@ restart:
         if (block_status == 0) {
           printf(not_used_template, block_addr, block_size);
         } else if (block_status == 1) {
-          printf(reserved_template, block_addr, block_size);
+          printf(used_template, block_addr, block_size);
         } else {
           printf(unmapped_template, block_addr, block_size);
         }
@@ -136,7 +139,7 @@ restart:
     if (block_status == 0) {
       printf(not_used_template, block_addr, block_size);
     } else if (block_status == 1) {
-      printf(reserved_template, block_addr, block_size);
+      printf(used_template, block_addr, block_size);
     } else {
       printf(unmapped_template, block_addr, block_size);
     }
@@ -160,21 +163,35 @@ int main() {
   struct rlimit limit;
   getrlimit(RLIMIT_STACK, &limit);
   
-  void* memory = mmap(
+  void* main_program_memory = mmap(
     BASE_ADDRESS, 
-    SPACE_RESERVED, 
+    BASE_SPACE_RESERVED, 
     PROT_READ | PROT_WRITE,
     MAP_PRIVATE | MAP_FIXED_NOREPLACE | MAP_ANONYMOUS,
     -1,
     0
   );
 
-  if (memory == MAP_FAILED) {
-    fprintf(stderr, "Memory map has failed\n");
+  if (main_program_memory == MAP_FAILED) {
+    fprintf(stderr, "Memory map for memory has failed\n");
     return 1;
   }
 
-  printf(" %p\n", memory);
+  void* debug_propgram_memory = mmap(
+    DEBUG_PLACE,
+    DBGP_SPACE_RESERVED, 
+    PROT_READ | PROT_WRITE,
+    MAP_PRIVATE | MAP_FIXED_NOREPLACE | MAP_ANONYMOUS,
+    -1,
+    0
+  );
+
+  if (debug_propgram_memory == MAP_FAILED) {
+    fprintf(stderr, "Memory map for debug_memory has failed\n");
+    return 1;
+  }
+
+  printf(" %p\n", main_program_memory);
 
   printf("    RLIMIT_STACK: %lu bytes\n", limit.rlim_cur);
   printf("    RLIMIT_STACK: %lu mb\n",    limit.rlim_cur / 1024 / 1024);
@@ -184,18 +201,18 @@ int main() {
   printf("            _end: %p\n", (void*)&_end);
   
   dump_who_sits_in_memory();
-  ((char*)memory)[0] = 'h';
-  ((char*)memory)[1] = 'e';
-  ((char*)memory)[2] = 'l';
-  ((char*)memory)[15 * page_size()] = 'l';
-  ((char*)memory)[16 * page_size()] = 'l';
-  ((char*)memory)[17 * page_size()] = 'l';
-  ((char*)memory)[18 * page_size()] = 'l';
-  void* target_addr = (char*)memory + (16 * page_size()); 
+  ((char*)main_program_memory)[0] = 'h';
+  ((char*)main_program_memory)[1] = 'e';
+  ((char*)main_program_memory)[2] = 'l';
+  ((char*)main_program_memory)[15 * page_size()] = 'l';
+  ((char*)main_program_memory)[16 * page_size()] = 'l';
+  ((char*)main_program_memory)[17 * page_size()] = 'l';
+  ((char*)main_program_memory)[18 * page_size()] = 'l';
+  void* target_addr = (char*)main_program_memory + (16 * page_size()); 
   madvise(target_addr, 2 * page_size(), MADV_DONTNEED);
 
   puts("dump in the allocated region");
-  dump_pages_inside_region(memory, GB(1));
+  dump_pages_inside_region(main_program_memory, GB(1));
 
   puts("dump heap");
   
@@ -240,10 +257,10 @@ int main() {
 
   alloca(251 * page_size());
   
-  char *mem = alloca(MB(7));
-  mem[MB(7) - 1] = 'a';
+  char *mem = alloca(MB(6));
+  mem[MB(5) - 1] = 'a';
 
-  puts("dump stack (after alloca(7mb); mem[7mb - 1] = 'a')");
+  puts("dump stack (after alloca(7mb); mem[5mb - 1] = 'a')");
   dump_pages_inside_region(
       (void*)(0x0000800000000000 - limit.rlim_cur), 
       limit.rlim_cur
